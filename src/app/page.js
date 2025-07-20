@@ -1,7 +1,6 @@
-// app/page.js
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { CircleDot } from "lucide-react";
+import { CircleDot, Video } from "lucide-react";
 import toast, { Toaster } from "react-hot-toast";
 import { useRouter } from "next/navigation";
 
@@ -10,9 +9,11 @@ export default function Home() {
   const [faceCount, setFaceCount] = useState(0);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  const combinedCanvasRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const [isRecording, setIsRecording] = useState(false);
-  const [recordedChunks, setRecordedChunks] = useState([]);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [noFaceToastShown, setNoFaceToastShown] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -24,6 +25,19 @@ export default function Home() {
       });
     }
   }, [cameraOpened]);
+
+  useEffect(() => {
+    let timer;
+    if (isRecording) {
+      timer = setInterval(() => {
+        setRecordingTime((prev) => prev + 1);
+      }, 1000);
+    } else {
+      clearInterval(timer);
+      setRecordingTime(0);
+    }
+    return () => clearInterval(timer);
+  }, [isRecording]);
 
   const loadScript = (src) => {
     return new Promise((resolve, reject) => {
@@ -39,13 +53,11 @@ export default function Home() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true });
       if (!videoRef.current) return;
-
       videoRef.current.srcObject = stream;
       await videoRef.current.play();
 
       const faceDetection = new window.FaceDetection({
-        locateFile: (file) =>
-          `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`,
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`,
       });
 
       faceDetection.setOptions({
@@ -54,20 +66,24 @@ export default function Home() {
       });
 
       faceDetection.onResults((results) => {
-        if (!canvasRef.current || !results.image) return;
+        if (!canvasRef.current || !combinedCanvasRef.current || !results.image) return;
 
         const canvas = canvasRef.current;
         const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
         canvas.width = results.image.width;
         canvas.height = results.image.height;
-
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
         const faces = results.detections || [];
         setFaceCount(faces.length);
+
+        if (faces.length === 0 && !noFaceToastShown) {
+          toast("😅 No face detected");
+          setNoFaceToastShown(true);
+        } else if (faces.length > 0) {
+          setNoFaceToastShown(false);
+        }
 
         faces.forEach((detection) => {
           const box = detection.boundingBox;
@@ -80,6 +96,14 @@ export default function Home() {
             box.height * canvas.height
           );
         });
+
+        const combinedCanvas = combinedCanvasRef.current;
+        const combinedCtx = combinedCanvas.getContext("2d");
+        combinedCanvas.width = canvas.width;
+        combinedCanvas.height = canvas.height;
+        combinedCtx.clearRect(0, 0, combinedCanvas.width, combinedCanvas.height);
+        combinedCtx.drawImage(videoRef.current, 0, 0, combinedCanvas.width, combinedCanvas.height);
+        combinedCtx.drawImage(canvas, 0, 0, combinedCanvas.width, combinedCanvas.height);
       });
 
       const detect = async () => {
@@ -100,10 +124,9 @@ export default function Home() {
   };
 
   const startRecording = () => {
-    const stream = videoRef.current.srcObject;
+    const stream = combinedCanvasRef.current.captureStream(30);
     mediaRecorderRef.current = new MediaRecorder(stream);
     const chunks = [];
-    setRecordedChunks([]);
 
     mediaRecorderRef.current.ondataavailable = (e) => {
       if (e.data.size > 0) chunks.push(e.data);
@@ -131,35 +154,43 @@ export default function Home() {
 
   if (!cameraOpened) {
     return (
-      <main className="min-h-screen bg-gradient-to-br from-purple-900 via-black to-purple-900 text-white flex flex-col justify-center items-center">
+      <main className="min-h-screen bg-gradient-to-br from-purple-900 via-black to-purple-900 text-white flex flex-col justify-center items-center px-4">
         <Toaster />
-        <h1 className="text-6xl font-extrabold mb-6 drop-shadow-[0_0_15px_#00f0ff] animate-bounce">
+        <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold mb-6 drop-shadow-[0_0_15px_#00f0ff] animate-bounce text-center">
           🎥 Face Tracker
         </h1>
-        <p className="mb-4 text-lg text-center max-w-md">
+        <p className="mb-4 text-base sm:text-lg text-center max-w-md">
           Welcome to the face tracking app. Open your camera to start recording with real-time face detection.
         </p>
-        <button
-          onClick={() => setCameraOpened(true)}
-          className="px-8 py-3 text-lg bg-black bg-opacity-80 hover:shadow-[0_0_25px_#00f0ff] text-white rounded-full border border-white backdrop-blur-md transition duration-300 animate-pulse"
-        >
-          🚀 Open Camera
-        </button>
+        <div className="flex gap-4 flex-col sm:flex-row">
+          <button
+            onClick={() => setCameraOpened(true)}
+            className="px-6 py-3 text-base sm:text-lg bg-black bg-opacity-80 hover:shadow-[0_0_25px_#00f0ff] text-white rounded-full border border-white backdrop-blur-md transition duration-300 animate-pulse"
+          >
+            🚀 Open Camera
+          </button>
+          <button
+            onClick={() => router.push("/videos")}
+            className="px-6 py-3 text-base sm:text-lg bg-lime-500 text-black hover:shadow-[0_0_25px_#00ff88] rounded-full border border-white transition duration-300 flex items-center gap-2"
+          >
+            <Video size={20} /> View Saved Videos
+          </button>
+        </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-purple-900 via-black to-purple-900 text-white flex flex-col items-center justify-center gap-6 p-6">
+    <main className="min-h-screen bg-gradient-to-br from-purple-900 via-black to-purple-900 text-white flex flex-col items-center justify-center gap-6 px-4 py-6">
       <Toaster position="top-center" />
-      <h2 className="text-2xl font-bold text-lime-400">
+      <h2 className="text-lg sm:text-xl md:text-2xl font-bold text-lime-400">
         Faces Detected: {faceCount}
       </h2>
 
-      <div className="relative w-[720px] h-[480px] rounded border border-lime-400 shadow-lg overflow-hidden">
+      <div className="relative w-full max-w-3xl aspect-video rounded border border-lime-400 shadow-lg overflow-hidden">
         <video
           ref={videoRef}
-          className="w-full h-full object-cover scale-x-[-1]"
+          className="w-full h-full object-cover"
           muted
           autoPlay
           playsInline
@@ -168,15 +199,19 @@ export default function Home() {
           ref={canvasRef}
           className="absolute top-0 left-0 w-full h-full"
         />
+        <canvas
+          ref={combinedCanvasRef}
+          className="hidden"
+        />
         {isRecording && (
           <div className="absolute top-3 left-3 flex items-center gap-2 text-red-500 font-semibold">
             <CircleDot className="animate-pulse" size={20} />
-            Recording...
+            Recording... {recordingTime}s
           </div>
         )}
       </div>
 
-      <div className="flex gap-4">
+      <div className="flex flex-col sm:flex-row gap-4">
         {!isRecording ? (
           <button
             onClick={startRecording}
@@ -196,7 +231,4 @@ export default function Home() {
     </main>
   );
 }
-
-
-
 
